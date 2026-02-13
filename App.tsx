@@ -3,32 +3,36 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Detection, Message } from './types';
 import { getChatResponse } from './services/gemini';
 import { runRoboflowWorkflow } from './services/roboflow';
+import { fetchProjectClasses } from './services/roboflowClasses';
+import { loadLocalModel, runLocalInference } from './services/localInference';
+import { ModelViewer } from './components/ModelViewer';
 
-// --- Helper for Roboflow colors ---
-const getLabelColor = (label: string) => {
-  const colors: Record<string, string> = {
-    'dent': '#E60012',
-    'scratch': '#FFA500',
-    'missing': '#FF00FF',
-    'ok': '#00FDFF',
-    'misalignment': '#E60012',
-    'bolt': '#00FF00'
-  };
-  return colors[label.toLowerCase()] || '#00FDFF';
+// ... (keep getLabelColor unchanged)
+const getLabelColor = (label: string, activeColors: Record<string, string> = {}) => {
+  // 1. Enforce strict color rules for QC status first (User Request: NOK=Red, OK=Green)
+  const lower = label.toLowerCase();
+
+  // Defect/Fail conditions -> Red
+  if (lower.includes('nok') || lower.includes('malo') || lower.includes('missing') || lower.includes('dent') || lower.includes('scratch')) {
+    return '#FF0000'; // Standard Red
+  }
+
+  // Good/Pass conditions -> Green
+  if (lower.includes('ok') || lower.includes('bueno') || lower.includes('good')) {
+    return '#00FF00'; // Standard Green
+  }
+
+  // 2. Fallback to Roboflow Project Colors if available
+  if (activeColors[label]) {
+    return activeColors[label];
+  }
+
+  // 3. Fallback for Warnings/Neutral
+  return '#FFA500'; // Orange
 };
 
-const SUPPORTED_CLASSES = [
-  { id: 'dent', color: '#E60012', label: 'Dent' },
-  { id: 'scratch', color: '#FFA500', label: 'Scratch' },
-  { id: 'missing', color: '#FF00FF', label: 'Missing' },
-  { id: 'misalignment', color: '#E60012', label: 'Misalignment' },
-  { id: 'bolt', color: '#00FF00', label: 'Bolt' },
-  { id: 'ok', color: '#00FDFF', label: 'OK' }
-];
-
-// --- Sub-components ---
-
-const Header: React.FC<{ modelName: string }> = ({ modelName }) => {
+// ... (keep Header unchanged except maybe model name usage)
+const Header: React.FC<{ modelName: string; mode: 'cloud' | 'local' }> = ({ modelName, mode }) => {
   const [time, setTime] = useState(new Date().toLocaleTimeString('en-GB', { hour12: false }));
 
   useEffect(() => {
@@ -44,7 +48,7 @@ const Header: React.FC<{ modelName: string }> = ({ modelName }) => {
           <div className="flex flex-col">
             <span className="text-white font-bold tracking-tighter text-sm uppercase">Mitsubishi Logisnext</span>
             <span className="text-edia-cyan text-[10px] font-mono tracking-widest leading-none uppercase">
-              Engine: {modelName || 'OFFLINE'}
+              Engine: {modelName || 'OFFLINE'} ({mode.toUpperCase()})
             </span>
           </div>
         </div>
@@ -62,20 +66,46 @@ const Header: React.FC<{ modelName: string }> = ({ modelName }) => {
   );
 };
 
-const ConfigScreen: React.FC<{ onConfigured: (fileName: string) => void }> = ({ onConfigured }) => {
+const ConfigScreen: React.FC<{
+  onConfigured: (fileName: string, classes: string[], colors: Record<string, string>, mode: 'cloud' | 'local') => void
+}> = ({ onConfigured }) => {
   const [isUploading, setIsUploading] = useState(false);
   const [progress, setProgress] = useState(0);
-  const handleConnect = () => {
+
+  const handleConnect = async () => {
     setIsUploading(true);
     let p = 0;
-    const interval = setInterval(() => {
-      p += 2; // Slower progress for effect
-      setProgress(p);
-      if (p >= 100) {
-        clearInterval(interval);
-        setTimeout(() => onConfigured("roboflow-workflow-v5"), 500);
+    const timer = setInterval(() => { if (p < 90) setProgress(p => p + 2); }, 50);
+
+    try {
+      // Cloud Logic Only
+      // We use the Workspace ID 'welding-hqci3' to fetch classes/colors metadata if possible, 
+      // or just default to empty/standard logic since the Main Inference is now Proxied.
+      // fetchProjectClasses might fail if key is Private on Browser?
+      // Let's wrap it safe or just use hardcoded/inferred classes from inference result later?
+      // For now, try fetching as before. If it fails, proceed with defaults.
+
+      let allClasses: string[] = ["object"];
+      let allColors: Record<string, string> = {};
+
+      try {
+        const projects = await fetchProjectClasses(import.meta.env.VITE_ROBOFLOW_API_KEY, "welding-hqci3");
+        allClasses = Array.from(new Set(projects.flatMap(p => p.classes)));
+        allColors = projects.reduce((acc, p) => ({ ...acc, ...p.colors }), {});
+      } catch (fetchErr) {
+        console.warn("Could not fetch project metadata (likely Private Key CORS). Using defaults.", fetchErr);
+        // Non-fatal. Continue to allow Inference Proxy to work.
       }
-    }, 30);
+
+      clearInterval(timer);
+      setProgress(100);
+      setTimeout(() => onConfigured("frontalmg", allClasses, allColors, 'cloud'), 500);
+    } catch (e: any) {
+      console.error(e);
+      clearInterval(timer);
+      setIsUploading(false);
+      alert(`Connection failed: ${e.message}`);
+    }
   };
 
   return (
@@ -88,43 +118,36 @@ const ConfigScreen: React.FC<{ onConfigured: (fileName: string) => void }> = ({ 
           <div className="w-10 h-10 bg-edia-cyan text-black flex items-center justify-center font-black">QC</div>
           <div>
             <h2 className="text-white font-bold uppercase tracking-widest text-sm">System Initialization</h2>
-            <p className="text-[10px] text-gray-500 font-mono">v4.0.2-Stable // Roboflow Core</p>
+            <p className="text-[10px] text-gray-500 font-mono">v4.2.0-CloudOnly</p>
           </div>
         </div>
 
         {!isUploading ? (
           <div className="space-y-6">
-            <p className="text-xs text-gray-400 font-mono leading-relaxed">
-              Initialize connection to Roboflow Inference Server (Workflow: detect-count-and-visualize-5).
-            </p>
+            <div className="text-xs text-gray-400 font-mono leading-relaxed p-4 bg-white/5 border border-white/5">
+              Connect to Roboflow Inference Engine.
+              <br />
+              <span className="opacity-50 text-[10px]">Using Python SDK Proxy</span>
+            </div>
 
             <button
               onClick={handleConnect}
               className="w-full py-6 border-2 border-dashed border-edia-cyan/30 hover:border-edia-cyan hover:bg-edia-cyan/5 transition-all group flex flex-col items-center gap-3"
             >
               <span className="material-icons text-edia-cyan group-hover:scale-110 transition-transform">cloud_sync</span>
-              <span className="text-[10px] font-bold text-edia-cyan uppercase tracking-widest">Connect to Workflow</span>
+              <span className="text-[10px] font-bold text-edia-cyan uppercase tracking-widest">
+                Connect to Roboflow
+              </span>
             </button>
-
-            <div className="flex justify-between items-center text-[9px] text-gray-600 font-mono uppercase">
-              <span>Target: Serverless Engine</span>
-              <span>Protocol: HTTPS/REST</span>
-            </div>
           </div>
         ) : (
           <div className="space-y-6 py-4">
             <div className="flex justify-between items-end mb-2">
-              <span className="text-[10px] text-edia-cyan font-bold uppercase animate-pulse">Connecting to Roboflow...</span>
+              <span className="text-[10px] text-edia-cyan font-bold uppercase animate-pulse">Initializing SDK...</span>
               <span className="text-xl font-mono text-white">{progress}%</span>
             </div>
             <div className="h-1 bg-white/5 w-full">
               <div className="h-full bg-edia-cyan shadow-[0_0_10px_#00FDFF]" style={{ width: `${progress}%` }}></div>
-            </div>
-            <div className="text-[9px] text-gray-600 font-mono uppercase space-y-1">
-              <p>{progress > 10 && "> Authenticating with API Key..."}</p>
-              <p>{progress > 30 && "> Handshaking with Workflow ID: detect-count-and-visualize-5..."}</p>
-              <p>{progress > 60 && "> Validating Inference Graph..."}</p>
-              <p>{progress > 90 && "> Establishing Secure Stream..."}</p>
             </div>
           </div>
         )}
@@ -133,11 +156,82 @@ const ConfigScreen: React.FC<{ onConfigured: (fileName: string) => void }> = ({ 
   );
 };
 
+
 const VisualAnalysis: React.FC<{
   isAnalyzing: boolean;
   detections: Detection[];
   currentImage: string;
 }> = ({ isAnalyzing, detections, currentImage }) => {
+  const imgRef = useRef<HTMLImageElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [overlayStyle, setOverlayStyle] = useState<React.CSSProperties>({});
+
+  // Function to calculate the exact position of the image within the container
+  const updateOverlayPosition = () => {
+    if (!imgRef.current || !containerRef.current) return;
+
+    const img = imgRef.current;
+    const container = containerRef.current;
+
+    const imgRatio = img.naturalWidth / img.naturalHeight;
+    const containerRatio = container.clientWidth / container.clientHeight;
+
+    let displayedWidth, displayedHeight, top, left;
+
+    if (containerRatio > imgRatio) {
+      // Image is taller than container (constrained by height)
+      displayedHeight = container.clientHeight;
+      displayedWidth = displayedHeight * imgRatio;
+      top = 0;
+      left = (container.clientWidth - displayedWidth) / 2;
+    } else {
+      // Image is wider than container (constrained by width)
+      displayedWidth = container.clientWidth;
+      displayedHeight = displayedWidth / imgRatio;
+      left = 0;
+      top = (container.clientHeight - displayedHeight) / 2;
+    }
+
+    setOverlayStyle({
+      position: 'absolute',
+      top: `${top}px`,
+      left: `${left}px`,
+      width: `${displayedWidth}px`,
+      height: `${displayedHeight}px`,
+      // Ensure overlay is exactly on top of image
+      pointerEvents: 'none'
+    });
+  };
+
+  useEffect(() => {
+    window.addEventListener('resize', updateOverlayPosition);
+    return () => window.removeEventListener('resize', updateOverlayPosition);
+  }, []);
+
+  // --- Simulated Progress for Analysis ---
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (isAnalyzing) {
+      setProgress(0);
+      // Fast simulation
+      timer = setInterval(() => {
+        setProgress(prev => {
+          if (prev >= 90) {
+            clearInterval(timer);
+            return 90;
+          }
+          return prev + 5;
+        });
+      }, 50);
+    } else {
+      setProgress(100);
+      setTimeout(() => setProgress(0), 500);
+    }
+    return () => clearInterval(timer);
+  }, [isAnalyzing]);
+
   return (
     <div className="flex-1 flex flex-col gap-4 p-6 overflow-hidden">
       <div className="flex justify-between items-center">
@@ -149,44 +243,72 @@ const VisualAnalysis: React.FC<{
         </div>
       </div>
 
-      <div className="flex-1 relative bg-surface-dark border border-white/10 overflow-hidden group grid-overlay">
+      <div ref={containerRef} className="flex-1 relative bg-surface-dark border border-white/10 overflow-hidden group grid-overlay">
         <div className="w-full h-full relative flex items-center justify-center bg-black">
           <img
+            ref={imgRef}
             src={currentImage || "https://picsum.photos/seed/industrial-qc/1200/800"}
             className={`w-full h-full object-contain transition-opacity duration-500 ${isAnalyzing ? 'opacity-30' : 'opacity-80'}`}
             alt="Inspection Frame"
+            onLoad={updateOverlayPosition}
           />
-          <div className="scanline"></div>
 
-          {!isAnalyzing && detections.map((det) => (
-            <div
-              key={det.id}
-              className="absolute border-2 transition-all duration-300 shadow-[0_0_10px_rgba(0,0,0,0.5)] z-40 group-hover:opacity-100"
-              style={{
-                top: `${det.bbox[0]}%`,
-                left: `${det.bbox[1]}%`,
-                width: `${det.bbox[2]}%`,
-                height: `${det.bbox[3]}%`,
-                borderColor: det.color,
-                backgroundColor: `${det.color}15`
-              }}
-            >
+          <div style={overlayStyle} className="pointer-events-none">
+            <div className="scanline"></div>
+            {!isAnalyzing && detections.map((det) => (
               <div
-                className="absolute -top-6 left-[-2px] px-2 py-0.5 text-[10px] font-bold text-white uppercase whitespace-nowrap flex items-center gap-1"
-                style={{ backgroundColor: det.color }}
+                key={det.id}
+                className={`absolute border-2 transition-all duration-300 shadow-[0_0_10px_rgba(0,0,0,0.5)] z-40 group-hover:opacity-100 ${det.color === '#FF0000' ? 'blink-urgent' : ''}`}
+                style={{
+                  top: `${det.bbox[0]}%`,
+                  left: `${det.bbox[1]}%`,
+                  width: `${det.bbox[2]}%`,
+                  height: `${det.bbox[3]}%`,
+                  borderColor: det.color,
+                  backgroundColor: `${det.color}15`
+                }}
               >
-                {det.label}
-                <span className="opacity-70 text-[8px]">{(det.confidence * 100).toFixed(0)}%</span>
+                <div
+                  className="absolute -top-6 left-[-2px] px-2 py-0.5 text-[10px] font-bold text-white uppercase whitespace-nowrap flex items-center gap-1"
+                  style={{ backgroundColor: det.color }}
+                >
+                  {det.label}
+                  <span className="opacity-70 text-[8px]">{(det.confidence * 100).toFixed(0)}%</span>
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
 
+        {!isAnalyzing && detections.length > 0 && (
+          <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50">
+            {detections.some(d => d.label.toLowerCase().includes('nok')) ? (
+              <div className="bg-[#FF0000]/20 border-2 border-[#FF0000] backdrop-blur-md px-6 py-2 rounded-sm shadow-[0_0_20px_rgba(255,0,0,0.6)] flex items-center gap-3 animate-pulse">
+                <span className="material-icons text-[#FF0000] text-3xl">warning</span>
+                <span className="text-[#FF0000] font-black text-xl tracking-widest uppercase">FRONTAL MG NOK</span>
+              </div>
+            ) : (
+              <div className="bg-[#00FF00]/20 border-2 border-[#00FF00] backdrop-blur-md px-6 py-2 rounded-sm shadow-[0_0_20px_rgba(0,255,0,0.4)] flex items-center gap-3">
+                <span className="material-icons text-[#00FF00] text-3xl">check_circle</span>
+                <span className="text-[#00FF00] font-black text-xl tracking-widest uppercase">FRONTALES MG OK</span>
+              </div>
+            )}
+          </div>
+        )}
+
         {isAnalyzing && (
-          <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center">
-            <div className="text-center">
-              <div className="w-16 h-16 border-4 border-edia-cyan border-t-transparent rounded-full animate-spin mb-4 mx-auto"></div>
-              <p className="text-edia-cyan font-mono text-sm animate-pulse tracking-[0.2em]">EXECUTING WORKFLOW...</p>
+          <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center">
+            <div className="w-96">
+              <div className="flex justify-between items-end mb-2">
+                <span className="text-edia-cyan font-mono text-sm animate-pulse tracking-[0.2em] uppercase">Processing Frame...</span>
+                <span className="text-white font-mono text-xl">{progress}%</span>
+              </div>
+              <div className="h-2 bg-white/10 w-full overflow-hidden">
+                <div
+                  className="h-full bg-edia-cyan shadow-[0_0_15px_#00FDFF] transition-all duration-75 ease-out"
+                  style={{ width: `${progress}%` }}
+                ></div>
+              </div>
             </div>
           </div>
         )}
@@ -199,80 +321,48 @@ const Sidebar: React.FC<{
   detections: Detection[];
   summary: string;
   modelName: string;
+  activeClasses: string[];
+  confidenceThreshold: number;
+  setConfidenceThreshold: (val: number) => void;
   onReset: () => void;
-}> = ({ detections, summary, modelName, onReset }) => {
+  onOpen3D: () => void;
+  onDebug: () => void;
+}> = ({ detections, summary, modelName, activeClasses, confidenceThreshold, setConfidenceThreshold, onReset, onOpen3D, onDebug }) => {
   return (
     <aside className="w-[380px] bg-panel-dark border-l border-white/10 flex flex-col shrink-0 overflow-y-auto">
-      {/* Model Loading Area */}
       <div className="p-6 border-b border-white/10 bg-surface-dark/50">
-        <div className="flex justify-between items-start mb-4">
-          <div>
-            <h2 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Active Model</h2>
-            <p className="text-xs font-mono text-edia-cyan font-bold truncate max-w-[200px]">{modelName}</p>
-          </div>
-          <button onClick={onReset} className="text-[9px] text-gray-600 hover:text-error uppercase font-bold transition-colors">Switch</button>
-        </div>
-        <div className="flex items-center gap-2 text-[9px] text-gray-500 uppercase font-mono">
-          <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>
-          <span>Workflow Connected (Cloud)</span>
-        </div>
+        <h2 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Active Model</h2>
+        <p className="text-xs font-mono text-edia-cyan font-bold truncate max-w-[200px]">{modelName}</p>
+        <button onClick={onReset} className="text-[9px] text-gray-600 hover:text-error uppercase font-bold transition-colors mt-2">Switch Logic</button>
       </div>
-
-      {/* Detected Classes */}
+      <div className="mt-4 pt-4 border-t border-white/5 px-6">
+        <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">Confidence: {(confidenceThreshold * 100).toFixed(0)}%</span>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          value={confidenceThreshold * 100}
+          onChange={(e) => setConfidenceThreshold(Number(e.target.value) / 100)}
+          className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-edia-cyan hover:accent-white transition-all mt-2"
+        />
+      </div>
       <div className="p-6 border-b border-white/10 bg-surface-dark">
-        <h2 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-4 flex justify-between">
-          <span>Active Labels</span>
-          <span className="text-edia-cyan font-mono">{detections.length}</span>
-        </h2>
-
+        <h2 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-4">Detections ({detections.length})</h2>
         <div className="space-y-2">
-          {detections.length > 0 ? (
-            detections.map(det => (
-              <div key={det.id} className="flex items-center gap-3 bg-black/40 p-2 border-l-2" style={{ borderLeftColor: det.color }}>
-                <div className="flex-1">
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-[11px] font-bold text-white uppercase">{det.label}</span>
-                    <span className="text-[10px] font-mono text-gray-500">{(det.confidence * 100).toFixed(1)}%</span>
-                  </div>
-                  <div className="h-1 bg-gray-900 rounded-full overflow-hidden">
-                    <div className="h-full transition-all duration-1000" style={{ backgroundColor: det.color, width: `${det.confidence * 100}%` }}></div>
-                  </div>
-                </div>
+          {detections.map(det => (
+            <div key={det.id} className="flex items-center gap-3 bg-black/40 p-2 border-l-2" style={{ borderLeftColor: det.color }}>
+              <div className="flex-1">
+                <span className="text-[11px] font-bold text-white uppercase block">{det.label}</span>
+                <span className="text-[10px] font-mono text-gray-500">{(det.confidence * 100).toFixed(1)}%</span>
               </div>
-            ))
-          ) : (
-            <div className="py-8 text-center border border-white/5 bg-black/20">
-              <p className="text-[10px] text-gray-600 uppercase italic">No active detections</p>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Supported Classes List - NEW SECTION */}
-      <div className="p-6 border-b border-white/10 bg-surface-dark/30">
-        <h2 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-4">Target Classes</h2>
-        <div className="grid grid-cols-2 gap-2">
-          {SUPPORTED_CLASSES.map(cls => (
-            <div key={cls.id} className="flex items-center gap-2 p-1.5 bg-black/40 border border-white/5 rounded-sm">
-              <div className="w-2 h-2 rounded-full shadow-[0_0_5px_currentColor]" style={{ color: cls.color, backgroundColor: cls.color }}></div>
-              <span className="text-[10px] text-gray-400 font-mono uppercase">{cls.label}</span>
             </div>
           ))}
         </div>
       </div>
-
-      {/* Model Insights */}
-      <div className="p-6 flex-1">
-        <h2 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-4">Inference Summary</h2>
-        <div className="bg-black/50 border border-white/5 p-4 rounded-sm">
-          <p className="text-xs text-gray-400 leading-relaxed font-mono">
-            {summary || "Upload frame to start visual inspection with active .PT model."}
-          </p>
-        </div>
-      </div>
-
-      <div className="p-6 bg-surface-dark border-t border-white/10">
-        <button className="w-full py-4 bg-mitsubishi-red text-white text-[10px] font-bold uppercase tracking-widest hover:bg-red-700 transition-colors">Generate QC Report</button>
+      <div className="p-6 bg-surface-dark border-t border-white/10 space-y-3">
+        <button onClick={onOpen3D} className="w-full py-3 bg-white/5 border border-white/10 text-gray-300 hover:text-white hover:bg-white/10 text-[10px] font-bold uppercase tracking-widest transition-colors flex items-center justify-center gap-2">
+          <span className="material-icons text-sm">view_in_ar</span> 3D Reference
+        </button>
       </div>
     </aside>
   );
@@ -337,15 +427,20 @@ const ChatWidget: React.FC = () => {
   );
 };
 
-// --- Main App ---
-
 const App: React.FC = () => {
   const [modelFile, setModelFile] = useState<string | null>(null);
+  const [inferenceMode, setInferenceMode] = useState<'cloud' | 'local'>('cloud');
+  const [show3DViewer, setShow3DViewer] = useState(false);
+  const [activeClasses, setActiveClasses] = useState<string[]>([]);
+  const [activeColors, setActiveColors] = useState<Record<string, string>>({});
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [detections, setDetections] = useState<Detection[]>([]);
   const [summary, setSummary] = useState('');
   const [currentImage, setCurrentImage] = useState('');
+  const [confidenceThreshold, setConfidenceThreshold] = useState(0.01);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const filteredDetections = detections.filter(d => d.confidence >= confidenceThreshold);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -360,30 +455,34 @@ const App: React.FC = () => {
       const base64 = resultStr.split(',')[1];
       setCurrentImage(resultStr);
 
-      // Get image dimensions for correct bounding box mapping
       const img = new Image();
       img.src = resultStr;
       img.onload = async () => {
         const imageDims = { width: img.naturalWidth, height: img.naturalHeight };
 
         try {
-          // Use Roboflow workflow service with explicit dimensions
-          const result: any = await runRoboflowWorkflow(base64, file.type, imageDims);
+          let result: any;
 
-          // Map common Roboflow classes to colors if present, or generate
+          if (inferenceMode === 'cloud') {
+            result = await runRoboflowWorkflow(base64, file.type, imageDims);
+          } else {
+            result = await runLocalInference(base64, confidenceThreshold);
+          }
+
           const mappedDetections: Detection[] = result.detections.map((d: any, idx: number) => ({
             id: `det-${idx}`,
             label: d.label,
             confidence: d.confidence,
             bbox: d.bbox,
-            color: getLabelColor(d.label) // Helper from existing code
+            color: getLabelColor(d.label, activeColors)
           }));
 
           setDetections(mappedDetections);
           setSummary(result.summary);
+
         } catch (err) {
           console.error(err);
-          setSummary("Inference failed.");
+          setSummary("Inference failed: " + (err as Error).message);
         } finally {
           setIsAnalyzing(false);
         }
@@ -392,18 +491,30 @@ const App: React.FC = () => {
     reader.readAsDataURL(file);
   };
 
+  const handleDebug = () => {
+    setDetections([
+      { id: 'dbg-1', label: 'TEST OK', confidence: 0.99, bbox: [10, 10, 20, 20], color: '#00FF00' },
+      { id: 'dbg-2', label: 'TEST NOK', confidence: 0.99, bbox: [40, 40, 20, 20], color: '#FF0000' }
+    ]);
+  };
+
   if (!modelFile) {
-    return <ConfigScreen onConfigured={setModelFile} />;
+    return <ConfigScreen onConfigured={(name, classes, colors, mode) => {
+      setModelFile(name);
+      setActiveClasses(classes);
+      setActiveColors(colors);
+      setInferenceMode(mode);
+    }} />;
   }
 
   return (
     <div className="flex flex-col h-screen font-sans selection:bg-edia-cyan selection:text-black bg-background-dark animate-in fade-in duration-700">
-      <Header modelName={modelFile} />
+      <Header modelName={modelFile} mode={inferenceMode} />
       <div className="flex-1 flex overflow-hidden">
         <div className="flex-1 flex flex-col min-w-0">
           <VisualAnalysis
             isAnalyzing={isAnalyzing}
-            detections={detections}
+            detections={filteredDetections}
             currentImage={currentImage}
           />
           <div className="h-16 bg-panel-dark border-t border-white/10 flex items-center px-6 gap-6">
@@ -420,17 +531,35 @@ const App: React.FC = () => {
                 <div className="absolute top-0 left-0 h-full bg-edia-cyan/30 w-full"></div>
                 <div className="absolute top-0 left-[40%] w-1 h-3 -mt-1 bg-edia-cyan shadow-[0_0_8px_#00FDFF]"></div>
               </div>
-              <span className="text-[10px] font-mono text-gray-500 uppercase">Engine Status: Active</span>
+              <span className="text-[10px] font-mono text-gray-500 uppercase">Engine Status: Active ({inferenceMode.toUpperCase()})</span>
             </div>
           </div>
         </div>
         <Sidebar
-          detections={detections}
+          detections={filteredDetections}
           summary={summary}
           modelName={modelFile}
+          activeClasses={activeClasses}
+          confidenceThreshold={confidenceThreshold}
+          setConfidenceThreshold={setConfidenceThreshold}
           onReset={() => setModelFile(null)}
+          onOpen3D={() => setShow3DViewer(true)}
+          onDebug={handleDebug}
         />
       </div>
+
+      {show3DViewer && (
+        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center p-8">
+          <div className="bg-panel-dark border border-white/10 w-full max-w-6xl h-[80vh] flex flex-col shadow-2xl relative">
+            <div className="absolute top-4 right-4 z-10">
+              <button onClick={() => setShow3DViewer(false)} className="bg-black/50 hover:bg-red-500/80 text-white p-2 rounded-full transition-colors backdrop-blur-sm">
+                <span className="material-icons text-xl">close</span>
+              </button>
+            </div>
+            <ModelViewer />
+          </div>
+        </div>
+      )}
 
       <ChatWidget />
     </div>
