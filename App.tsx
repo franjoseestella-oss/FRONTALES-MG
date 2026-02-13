@@ -6,6 +6,7 @@ import { runRoboflowWorkflow } from './services/roboflow';
 import { fetchProjectClasses } from './services/roboflowClasses';
 import { loadLocalModel, runLocalInference } from './services/localInference';
 import { ModelViewer } from './components/ModelViewer';
+import { ProductionPlanScreen } from './components/ProductionPlanScreen';
 
 // ... (keep getLabelColor unchanged)
 const getLabelColor = (label: string, activeColors: Record<string, string> = {}) => {
@@ -32,7 +33,7 @@ const getLabelColor = (label: string, activeColors: Record<string, string> = {})
 };
 
 // ... (keep Header unchanged except maybe model name usage)
-const Header: React.FC<{ modelName: string; mode: 'cloud' | 'local' }> = ({ modelName, mode }) => {
+const Header: React.FC<{ modelName: string; mode: 'cloud' | 'local'; currentView: string; onViewChange: (view: 'inference' | 'plan') => void }> = ({ modelName, mode, currentView, onViewChange }) => {
   const [time, setTime] = useState(new Date().toLocaleTimeString('en-GB', { hour12: false }));
 
   useEffect(() => {
@@ -48,11 +49,29 @@ const Header: React.FC<{ modelName: string; mode: 'cloud' | 'local' }> = ({ mode
           <div className="flex flex-col">
             <span className="text-white font-bold tracking-tighter text-sm uppercase">Mitsubishi Logisnext</span>
             <span className="text-edia-cyan text-[10px] font-mono tracking-widest leading-none uppercase">
-              Engine: {modelName || 'OFFLINE'} ({mode.toUpperCase()})
+              Industrial QC Dashboard
             </span>
           </div>
         </div>
+
+        <div className="h-8 w-px bg-white/10 mx-4"></div>
+
+        <nav className="flex space-x-1">
+          <button
+            onClick={() => onViewChange('inference')}
+            className={`px-4 py-1.5 text-xs font-bold uppercase tracking-widest rounded transition-colors ${currentView === 'inference' ? 'bg-edia-cyan text-black' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
+          >
+            Inspección
+          </button>
+          <button
+            onClick={() => onViewChange('plan')}
+            className={`px-4 py-1.5 text-xs font-bold uppercase tracking-widest rounded transition-colors ${currentView === 'plan' ? 'bg-edia-cyan text-black' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
+          >
+            Production Plan
+          </button>
+        </nav>
       </div>
+
       <div className="flex items-center space-x-8">
         <div className="flex flex-col items-end">
           <span className="text-lg font-mono text-white leading-none font-bold">{time}</span>
@@ -327,9 +346,19 @@ const Sidebar: React.FC<{
   onReset: () => void;
   onOpen3D: () => void;
   onDebug: () => void;
-}> = ({ detections, summary, modelName, activeClasses, confidenceThreshold, setConfidenceThreshold, onReset, onOpen3D, onDebug }) => {
+  loadedReference?: { referencia: string; descripcion: string; secuencia?: number } | null;
+}> = ({ detections, summary, modelName, activeClasses, confidenceThreshold, setConfidenceThreshold, onReset, onOpen3D, onDebug, loadedReference }) => {
   return (
     <aside className="w-[380px] bg-panel-dark border-l border-white/10 flex flex-col shrink-0 overflow-y-auto">
+
+      {/* Show 3D Model if reference is loaded */}
+      {loadedReference && (
+        <div className="border-b border-white/10 bg-black animate-in slide-in-from-right duration-300">
+          <div className="h-[600px]">
+            <ModelViewer modelPath={`/models/${loadedReference.referencia}.glb`} />
+          </div>
+        </div>
+      )}
       <div className="p-6 border-b border-white/10 bg-surface-dark/50">
         <h2 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Active Model</h2>
         <p className="text-xs font-mono text-edia-cyan font-bold truncate max-w-[200px]">{modelName}</p>
@@ -438,6 +467,12 @@ const App: React.FC = () => {
   const [summary, setSummary] = useState('');
   const [currentImage, setCurrentImage] = useState('');
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.01);
+  const [currentView, setCurrentView] = useState<'inference' | 'plan'>('inference');
+  const [loadedReference, setLoadedReference] = useState<{
+    referencia: string;
+    descripcion: string;
+    secuencia?: number;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const filteredDetections = detections.filter(d => d.confidence >= confidenceThreshold);
@@ -507,46 +542,114 @@ const App: React.FC = () => {
     }} />;
   }
 
+  const handleLoadReference = (referencia: string, descripcion: string, secuencia?: number) => {
+    // Save the loaded reference data
+    setLoadedReference({ referencia, descripcion, secuencia });
+    // Switch to inspection view
+    setCurrentView('inference');
+    // Set model file for the header display (without extension)
+    setModelFile(referencia);
+  };
+
   return (
     <div className="flex flex-col h-screen font-sans selection:bg-edia-cyan selection:text-black bg-background-dark animate-in fade-in duration-700">
-      <Header modelName={modelFile} mode={inferenceMode} />
-      <div className="flex-1 flex overflow-hidden">
-        <div className="flex-1 flex flex-col min-w-0">
-          <VisualAnalysis
-            isAnalyzing={isAnalyzing}
-            detections={filteredDetections}
-            currentImage={currentImage}
-          />
-          <div className="h-16 bg-panel-dark border-t border-white/10 flex items-center px-6 gap-6">
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="bg-edia-cyan text-black px-4 py-2 font-bold uppercase text-[10px] tracking-widest flex items-center gap-2 hover:bg-white transition-colors"
-            >
-              <span className="material-icons text-sm">add_a_photo</span> Run Inference
-            </button>
-            <input type="file" hidden ref={fileInputRef} accept="image/*" onChange={handleFileUpload} />
+      <Header modelName={modelFile} mode={inferenceMode} currentView={currentView} onViewChange={setCurrentView} />
 
-            <div className="flex-1 flex items-center gap-4">
-              <div className="h-1 bg-white/5 flex-1 relative">
-                <div className="absolute top-0 left-0 h-full bg-edia-cyan/30 w-full"></div>
-                <div className="absolute top-0 left-[40%] w-1 h-3 -mt-1 bg-edia-cyan shadow-[0_0_8px_#00FDFF]"></div>
+      {currentView === 'plan' ? (
+        <ProductionPlanScreen onLoadReference={handleLoadReference} />
+      ) : (
+        <div className="flex-1 flex overflow-hidden">
+          <div className="flex-1 flex flex-col min-w-0">
+
+            {/* Reference Info Panel - Only shown when a reference is loaded */}
+            {loadedReference && (
+              <div className="bg-gradient-to-r from-edia-cyan/10 to-transparent border-b border-edia-cyan/30 px-6 py-3 animate-in slide-in-from-top duration-300">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-8">
+                    {/* Referencia */}
+                    <div className="flex flex-col">
+                      <span className="text-[9px] text-gray-500 uppercase tracking-widest font-bold mb-1.5">Referencia</span>
+                      <div className="flex items-center gap-2">
+                        <span className="material-icons text-edia-cyan text-base">inventory_2</span>
+                        <span className="text-white font-bold font-mono text-base">{loadedReference.referencia}</span>
+                      </div>
+                    </div>
+
+                    {/* Vertical Divider */}
+                    <div className="h-11 w-px bg-white/10"></div>
+
+                    {/* Secuencia */}
+                    {loadedReference.secuencia && (
+                      <>
+                        <div className="flex flex-col">
+                          <span className="text-[9px] text-gray-500 uppercase tracking-widest font-bold mb-1.5">Secuencia</span>
+                          <div className="flex items-center gap-2">
+                            <span className="material-icons text-edia-cyan text-base">tag</span>
+                            <span className="text-edia-cyan font-bold font-mono text-base">{loadedReference.secuencia}</span>
+                          </div>
+                        </div>
+
+                        {/* Vertical Divider */}
+                        <div className="h-11 w-px bg-white/10"></div>
+                      </>
+                    )}
+
+                    {/* Descripción */}
+                    <div className="flex flex-col">
+                      <span className="text-[9px] text-gray-500 uppercase tracking-widest font-bold mb-1.5">Descripción</span>
+                      <div className="flex items-center gap-2">
+                        <span className="material-icons text-edia-cyan text-base">description</span>
+                        <span className="text-white text-sm font-medium">{loadedReference.descripcion}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Close Button */}
+                  <button
+                    onClick={() => setLoadedReference(null)}
+                    className="ml-4 w-8 h-8 flex items-center justify-center rounded hover:bg-white/10 text-gray-500 hover:text-white transition-colors"
+                    title="Limpiar referencia cargada"
+                  >
+                    <span className="material-icons text-base">close</span>
+                  </button>
+                </div>
               </div>
-              <span className="text-[10px] font-mono text-gray-500 uppercase">Engine Status: Active ({inferenceMode.toUpperCase()})</span>
+            )}
+
+            <VisualAnalysis
+              isAnalyzing={isAnalyzing}
+              detections={filteredDetections}
+              currentImage={currentImage}
+            />
+            <div className="h-16 bg-panel-dark border-t border-white/10 flex items-center px-6 gap-6">
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="bg-edia-cyan text-black px-4 py-2 font-bold uppercase text-[10px] tracking-widest flex items-center gap-2 hover:bg-white transition-colors"
+              >
+                <span className="material-icons text-sm">add_a_photo</span> Run Inference
+              </button>
+              <input type="file" hidden ref={fileInputRef} accept="image/*" onChange={handleFileUpload} />
+
+              <div className="flex-1 flex items-center gap-4">
+
+                <span className="text-[10px] font-mono text-gray-500 uppercase">Engine Status: Active ({inferenceMode.toUpperCase()})</span>
+              </div>
             </div>
           </div>
+          <Sidebar
+            detections={filteredDetections}
+            summary={summary}
+            modelName={modelFile}
+            activeClasses={activeClasses}
+            confidenceThreshold={confidenceThreshold}
+            setConfidenceThreshold={setConfidenceThreshold}
+            onReset={() => setModelFile(null)}
+            onOpen3D={() => setShow3DViewer(true)}
+            onDebug={handleDebug}
+            loadedReference={loadedReference}
+          />
         </div>
-        <Sidebar
-          detections={filteredDetections}
-          summary={summary}
-          modelName={modelFile}
-          activeClasses={activeClasses}
-          confidenceThreshold={confidenceThreshold}
-          setConfidenceThreshold={setConfidenceThreshold}
-          onReset={() => setModelFile(null)}
-          onOpen3D={() => setShow3DViewer(true)}
-          onDebug={handleDebug}
-        />
-      </div>
+      )}
 
       {show3DViewer && (
         <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center p-8">
@@ -556,7 +659,7 @@ const App: React.FC = () => {
                 <span className="material-icons text-xl">close</span>
               </button>
             </div>
-            <ModelViewer />
+            <ModelViewer modelPath={loadedReference ? `/models/${loadedReference.referencia}.glb` : undefined} />
           </div>
         </div>
       )}

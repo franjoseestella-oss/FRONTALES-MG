@@ -3,6 +3,7 @@ from flask_cors import CORS
 import base64
 import os
 import requests
+import pyodbc
 
 app = Flask(__name__)
 # Allow CORS from the app
@@ -47,6 +48,39 @@ def roboflow_proxy():
     except Exception as e:
         print(f"Proxy Error: {e}")
         return jsonify({"error": str(e)}), 500
+
+@app.route('/production-plan', methods=['GET'])
+def get_production_plan():
+    try:
+        # Connection String based on User Screenshot
+        conn_str = (
+            r'DRIVER={ODBC Driver 17 for SQL Server};'
+            r'SERVER=DESKTOP-PMRMSPT\SQLEXPRESS;'
+            r'DATABASE=DAFEED;'
+            r'Trusted_Connection=yes;'
+        )
+        
+        print(f"Connecting to DB: {conn_str}")
+        conn = pyodbc.connect(conn_str)
+        cursor = conn.cursor()
+        
+        query = "SELECT TOP 100 REFERENCIA, SECUENCIA, DESCRIPCION FROM dbo.SECUENCIAS_FRONTALES_MG ORDER BY SECUENCIA DESC"
+        cursor.execute(query)
+        
+        columns = [column[0] for column in cursor.description]
+        results = []
+        
+        for row in cursor.fetchall():
+            results.append(dict(zip(columns, row)))
+            
+        conn.close()
+        print(f"Fetched {len(results)} rows.")
+        return jsonify({"success": True, "data": results}), 200
+        
+    except Exception as e:
+        print(f"Database Connection Error: {e}")
+        # Fallback to verify if driver is issue
+        return jsonify({"success": False, "error": str(e), "drivers": pyodbc.drivers()}), 500
 
 @app.route('/')
 def home():

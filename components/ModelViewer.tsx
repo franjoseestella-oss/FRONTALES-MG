@@ -7,8 +7,19 @@ function Model({ url }: { url: string }) {
     return <primitive object={scene} />;
 }
 
-export const ModelViewer = () => {
-    const [modelUrl, setModelUrl] = useState<string | null>(null);
+interface ModelViewerProps {
+    modelPath?: string; // Optional: Load model from this path directly
+}
+
+export const ModelViewer: React.FC<ModelViewerProps> = ({ modelPath }) => {
+    const [modelUrl, setModelUrl] = useState<string | null>(modelPath || null);
+
+    // Update modelUrl if modelPath prop changes
+    useEffect(() => {
+        if (modelPath) {
+            setModelUrl(modelPath);
+        }
+    }, [modelPath]);
 
     const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
