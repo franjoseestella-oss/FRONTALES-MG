@@ -33,7 +33,7 @@ const getLabelColor = (label: string, activeColors: Record<string, string> = {})
 };
 
 // ... (keep Header unchanged except maybe model name usage)
-const Header: React.FC<{ modelName: string; mode: 'cloud' | 'local'; currentView: string; onViewChange: (view: 'inference' | 'plan') => void }> = ({ modelName, mode, currentView, onViewChange }) => {
+const Header: React.FC<{ modelName: string; mode: 'cloud' | 'local'; currentView: string; onViewChange: (view: 'inference' | 'plan' | 'config3d') => void }> = ({ modelName, mode, currentView, onViewChange }) => {
   const [time, setTime] = useState(new Date().toLocaleTimeString('en-GB', { hour12: false }));
 
   useEffect(() => {
@@ -68,6 +68,12 @@ const Header: React.FC<{ modelName: string; mode: 'cloud' | 'local'; currentView
             className={`px-4 py-1.5 text-xs font-bold uppercase tracking-widest rounded transition-colors ${currentView === 'plan' ? 'bg-edia-cyan text-black' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
           >
             Production Plan
+          </button>
+          <button
+            onClick={() => onViewChange('config3d')}
+            className={`px-4 py-1.5 text-xs font-bold uppercase tracking-widest rounded transition-colors ${currentView === 'config3d' ? 'bg-edia-cyan text-black' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
+          >
+            Configurar 3D
           </button>
         </nav>
       </div>
@@ -350,15 +356,6 @@ const Sidebar: React.FC<{
 }> = ({ detections, summary, modelName, activeClasses, confidenceThreshold, setConfidenceThreshold, onReset, onOpen3D, onDebug, loadedReference }) => {
   return (
     <aside className="w-[380px] bg-panel-dark border-l border-white/10 flex flex-col shrink-0 overflow-y-auto">
-
-      {/* Show 3D Model if reference is loaded */}
-      {loadedReference && (
-        <div className="border-b border-white/10 bg-black animate-in slide-in-from-right duration-300">
-          <div className="h-[600px]">
-            <ModelViewer modelPath={`/models/${loadedReference.referencia}.glb`} />
-          </div>
-        </div>
-      )}
       <div className="p-6 border-b border-white/10 bg-surface-dark/50">
         <h2 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Active Model</h2>
         <p className="text-xs font-mono text-edia-cyan font-bold truncate max-w-[200px]">{modelName}</p>
@@ -467,7 +464,7 @@ const App: React.FC = () => {
   const [summary, setSummary] = useState('');
   const [currentImage, setCurrentImage] = useState('');
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.01);
-  const [currentView, setCurrentView] = useState<'inference' | 'plan'>('inference');
+  const [currentView, setCurrentView] = useState<'inference' | 'plan' | 'config3d'>('inference');
   const [loadedReference, setLoadedReference] = useState<{
     referencia: string;
     descripcion: string;
@@ -557,6 +554,10 @@ const App: React.FC = () => {
 
       {currentView === 'plan' ? (
         <ProductionPlanScreen onLoadReference={handleLoadReference} />
+      ) : currentView === 'config3d' ? (
+        <div className="flex-1 bg-black">
+          <ModelViewer showControls={true} />
+        </div>
       ) : (
         <div className="flex-1 flex overflow-hidden">
           <div className="flex-1 flex flex-col min-w-0">

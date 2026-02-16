@@ -1,0 +1,55 @@
+/* 3D Model Labels/Hotspots Styles */
+.label-hotspot {
+    background-color: rgba(255, 255, 255, 0.9);
+    border-radius: 4px;
+    padding: 8px 12px;
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    color: #000;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    border: 2px solid #00FDFF;
+    transition: all 0.3s ease;
+    white-space: nowrap;
+    pointer-events: auto;
+}
+
+.label-hotspot:hover {
+    background-color: #00FDFF;
+    color: #000;
+    transform: scale(1.1);
+    box-shadow: 0 4px 16px rgba(0, 253, 255, 0.5);
+}
+
+.label-hotspot.selected {
+    background-color: #00FDFF;
+    color: #000;
+    border-color: #00FDFF;
+    box-shadow: 0 0 20px rgba(0, 253, 255, 0.8);
+    transform: scale(1.15);
+}
+
+.hotspot-annotation {
+    text-align: center;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Optional: Animation for labels */
+@keyframes pulse-label {
+
+    0%,
+    100% {
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+
+    50% {
+        box-shadow: 0 2px 16px rgba(0, 253, 255, 0.6);
+    }
+}
+
+.label-hotspot.pulse {
+    animation: pulse-label 2s ease-in-out infinite;
+}
