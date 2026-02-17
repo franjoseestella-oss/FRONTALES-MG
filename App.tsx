@@ -45,13 +45,7 @@ const Header: React.FC<{ modelName: string; mode: 'cloud' | 'local'; currentView
     <header className="h-16 border-b border-white/10 bg-panel-dark flex items-center justify-between px-6 shrink-0 z-50">
       <div className="flex items-center space-x-6">
         <div className="flex items-center space-x-3">
-          <div className="w-8 h-8 bg-mitsubishi-red flex items-center justify-center font-bold text-lg select-none">M</div>
-          <div className="flex flex-col">
-            <span className="text-white font-bold tracking-tighter text-sm uppercase">Mitsubishi Logisnext</span>
-            <span className="text-edia-cyan text-[10px] font-mono tracking-widest leading-none uppercase">
-              Industrial QC Dashboard
-            </span>
-          </div>
+          <img src="/Imagenes/logo.PNG" alt="Mitsubishi Logisnext" className="h-[60px] object-contain" />
         </div>
 
         <div className="h-8 w-px bg-white/10 mx-4"></div>
@@ -464,12 +458,13 @@ const App: React.FC = () => {
   const [summary, setSummary] = useState('');
   const [currentImage, setCurrentImage] = useState('');
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.01);
-  const [currentView, setCurrentView] = useState<'inference' | 'plan' | 'config3d'>('inference');
+  const [currentView, setCurrentView] = useState<'inference' | 'plan' | 'config3d'>('plan');
   const [loadedReference, setLoadedReference] = useState<{
     referencia: string;
     descripcion: string;
     secuencia?: number;
   } | null>(null);
+  const [show3DInInspection, setShow3DInInspection] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const filteredDetections = detections.filter(d => d.confidence >= confidenceThreshold);
@@ -546,6 +541,8 @@ const App: React.FC = () => {
     setCurrentView('inference');
     // Set model file for the header display (without extension)
     setModelFile(referencia);
+    // Show 3D panel by default when loading a reference
+    setShow3DInInspection(true);
   };
 
   return (
@@ -605,24 +602,63 @@ const App: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Close Button */}
-                  <button
-                    onClick={() => setLoadedReference(null)}
-                    className="ml-4 w-8 h-8 flex items-center justify-center rounded hover:bg-white/10 text-gray-500 hover:text-white transition-colors"
-                    title="Limpiar referencia cargada"
-                  >
-                    <span className="material-icons text-base">close</span>
-                  </button>
+                  {/* Action Buttons */}
+                  <div className="flex items-center gap-2">
+                    {/* Toggle 3D Button */}
+                    <button
+                      onClick={() => setShow3DInInspection(!show3DInInspection)}
+                      className={`px-3 py-1.5 flex items-center gap-2 rounded transition-all ${show3DInInspection
+                        ? 'bg-edia-cyan/20 border border-edia-cyan text-edia-cyan hover:bg-edia-cyan/30'
+                        : 'bg-white/5 border border-white/10 text-gray-400 hover:bg-white/10 hover:text-white'
+                        }`}
+                      title={show3DInInspection ? 'Ocultar modelo 3D' : 'Mostrar modelo 3D'}
+                    >
+                      <span className="material-icons text-sm">{show3DInInspection ? 'visibility' : 'visibility_off'}</span>
+                      <span className="text-[10px] font-bold uppercase tracking-widest">3D</span>
+                    </button>
+
+                    {/* Close Button */}
+                    <button
+                      onClick={() => setLoadedReference(null)}
+                      className="w-8 h-8 flex items-center justify-center rounded hover:bg-white/10 text-gray-500 hover:text-white transition-colors"
+                      title="Limpiar referencia cargada"
+                    >
+                      <span className="material-icons text-base">close</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
 
-            <VisualAnalysis
-              isAnalyzing={isAnalyzing}
-              detections={filteredDetections}
-              currentImage={currentImage}
-            />
-            <div className="h-16 bg-panel-dark border-t border-white/10 flex items-center px-6 gap-6">
+            {/* Main Content Area - Split view when reference is loaded */}
+            <div className="flex-1 flex overflow-hidden">
+              {/* Left Side - Visual Analysis (Inference) */}
+              <div className={`flex flex-col transition-all duration-300 ${loadedReference && show3DInInspection ? 'w-1/2' : 'w-full'}`}>
+                <VisualAnalysis
+                  isAnalyzing={isAnalyzing}
+                  detections={filteredDetections}
+                  currentImage={currentImage}
+                />
+              </div>
+
+              {/* Right Side - 3D Model Viewer (only when reference is loaded and 3D is enabled) */}
+              {loadedReference && show3DInInspection && (
+                <div className="w-1/2 border-l border-white/10 bg-black flex flex-col animate-in slide-in-from-right duration-300">
+                  <div className="p-4 border-b border-white/10 bg-surface-dark/50">
+                    <div className="flex items-center gap-2">
+                      <span className="material-icons text-edia-cyan text-base">view_in_ar</span>
+                      <h2 className="text-sm font-bold text-white uppercase tracking-widest">3D Reference Model</h2>
+                    </div>
+                    <p className="text-[10px] text-gray-500 font-mono mt-1">📁 /models/{loadedReference.referencia}.glb</p>
+                  </div>
+                  <div className="flex-1">
+                    <ModelViewer modelPath={`/models/${loadedReference.referencia}.glb`} />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="h-16 bg-panel-dark border-t border-white/10 flex items-center px-6 gap-6 shrink-0">
               <button
                 onClick={() => fileInputRef.current?.click()}
                 className="bg-edia-cyan text-black px-4 py-2 font-bold uppercase text-[10px] tracking-widest flex items-center gap-2 hover:bg-white transition-colors"
