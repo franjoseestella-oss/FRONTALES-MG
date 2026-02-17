@@ -24,7 +24,19 @@ export const ProductionPlanScreen: React.FC<ProductionPlanScreenProps> = ({ onLo
         setLoading(true);
         setError(null);
         try {
-            const response = await fetch('http://localhost:5000/production-plan');
+            // Use 127.0.0.1 to avoid localhost resolution issues (IPv6 vs IPv4)
+            const response = await fetch('http://127.0.0.1:5000/production-plan');
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                try {
+                    const errorJson = JSON.parse(errorText);
+                    throw new Error(errorJson.error || `Server Error: ${response.status}`);
+                } catch (e) {
+                    throw new Error(`Server Error: ${response.status} - ${errorText}`);
+                }
+            }
+
             const result = await response.json();
 
             if (result.success) {
@@ -46,7 +58,12 @@ export const ProductionPlanScreen: React.FC<ProductionPlanScreenProps> = ({ onLo
             }
         } catch (err: any) {
             console.error("Failed to load plan:", err);
-            setError(err.message || "Failed to connect to Database");
+            // More descriptive error for the user
+            if (err.message && err.message.includes("Failed to fetch")) {
+                setError("Cannot reach Backend Server (http://127.0.0.1:5000). Is the 'Roboflow Backend' window open?");
+            } else {
+                setError(err.message || "Failed to connect to Database");
+            }
         } finally {
             setLoading(false);
         }

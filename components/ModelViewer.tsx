@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls, Stage, useGLTF, Html, Grid, GizmoHelper, GizmoViewport } from '@react-three/drei';
+import { OrbitControls, Stage, useGLTF, Html, Grid, GizmoHelper, GizmoViewport, TransformControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { Settings3DScreen, Settings3DConfig, defaultSettings } from './Settings3DScreen';
 
@@ -19,15 +19,24 @@ interface Label3DProps {
     hotspot: Hotspot;
     isSelected: boolean;
     onClick: () => void;
+    onMouseDown?: (e: React.MouseEvent) => void;
 }
 
-function Label3D({ hotspot, isSelected, onClick }: Label3DProps) {
+function Label3D({ hotspot, isSelected, onClick, onMouseDown }: Label3DProps) {
+    const handleMouseDown = (e: React.MouseEvent) => {
+        e.stopPropagation(); // Prevent canvas click
+        onClick(); // Select the hotspot first
+        if (onMouseDown) {
+            onMouseDown(e);
+        }
+    };
+
     return (
         <Html position={hotspot.position} center>
             <div
                 className={`label-hotspot ${isSelected ? 'selected' : ''}`}
-                onClick={onClick}
-                style={{ cursor: 'pointer' }}
+                onMouseDown={handleMouseDown}
+                style={{ cursor: isSelected ? 'move' : 'pointer' }}
             >
                 <div className="hotspot-annotation">{hotspot.text}</div>
             </div>
@@ -36,30 +45,135 @@ function Label3D({ hotspot, isSelected, onClick }: Label3DProps) {
 }
 
 function ClickToAddHotspot({ onAddHotspot, enabled }: { onAddHotspot: (position: [number, number, number]) => void, enabled: boolean }) {
-    const { camera, scene, raycaster } = useThree();
+    const { camera, scene, raycaster, gl } = useThree();
 
     useEffect(() => {
         if (!enabled) return;
 
+        const canvas = gl.domElement;
+
         const handleClick = (event: MouseEvent) => {
-            const canvas = event.target as HTMLCanvasElement;
+            // Get canvas position
+            const rect = canvas.getBoundingClientRect();
+
+            // Calculate normalized device coordinates (-1 to +1)
+            const x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            const y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+            // Update raycaster
+            raycaster.setFromCamera(new THREE.Vector2(x, y), camera);
+
+            // Filter to only check mesh objects (not HTML overlays)
+            const meshes = scene.children.filter(child => {
+                // Recursively find all meshes in the scene
+                const hasMesh = (obj: any): boolean => {
+                    if (obj.type === 'Mesh' || obj.isMesh) return true;
+                    if (obj.children) {
+                        return obj.children.some(hasMesh);
+                    }
+                    return false;
+                };
+                return hasMesh(child);
+            });
+
+            // Raycast against all objects recursively
+            const intersects = raycaster.intersectObjects(scene.children, true);
+
+            // Filter out HTML elements and get first mesh intersection
+            const meshIntersect = intersects.find(intersect =>
+                intersect.object.type === 'Mesh' || (intersect.object as any).isMesh
+            );
+
+            if (meshIntersect) {
+                const point = meshIntersect.point;
+                onAddHotspot([point.x, point.y, point.z]);
+                console.log('Hotspot added at:', point.x.toFixed(2), point.y.toFixed(2), point.z.toFixed(2));
+            } else {
+                console.log('No mesh intersection found. Click on the model.');
+            }
+        };
+
+        canvas.addEventListener('click', handleClick);
+        return () => canvas.removeEventListener('click', handleClick);
+    }, [enabled, camera, scene, raycaster, gl, onAddHotspot]);
+
+    return null;
+}
+
+function DragHotspot({
+    enabled,
+    hotspotId,
+    onUpdatePosition,
+    startDragTrigger,
+    onDragChange,
+    onDragEnd
+}: {
+    enabled: boolean;
+    hotspotId: string | null;
+    onUpdatePosition: (id: string, position: [number, number, number]) => void;
+    startDragTrigger?: number;
+    onDragChange?: (isDragging: boolean) => void;
+    onDragEnd?: () => void;
+}) {
+    const { camera, scene, raycaster, gl } = useThree();
+    // Use a ref to track the last processed trigger to avoid re-triggering on rerenders
+    const lastTriggerRef = React.useRef<number | undefined>(undefined);
+
+    useEffect(() => {
+        if (!enabled || !hotspotId) return;
+
+        const canvas = gl.domElement;
+        let dragging = false;
+
+        const updatePosition = (event: MouseEvent) => {
             const rect = canvas.getBoundingClientRect();
             const x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
             const y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
-            const mouseVector = new THREE.Vector2(x, y);
-            raycaster.setFromCamera(mouseVector, camera);
+            raycaster.setFromCamera(new THREE.Vector2(x, y), camera);
             const intersects = raycaster.intersectObjects(scene.children, true);
 
-            if (intersects.length > 0) {
-                const point = intersects[0].point;
-                onAddHotspot([point.x, point.y, point.z]);
+            const meshIntersect = intersects.find(intersect =>
+                intersect.object.type === 'Mesh' || (intersect.object as any).isMesh
+            );
+
+            if (meshIntersect) {
+                const point = meshIntersect.point;
+                onUpdatePosition(hotspotId, [point.x, point.y, point.z]);
             }
         };
 
-        window.addEventListener('click', handleClick);
-        return () => window.removeEventListener('click', handleClick);
-    }, [enabled, camera, scene, raycaster, onAddHotspot]);
+        const handleMouseMove = (event: MouseEvent) => {
+            if (!dragging) return;
+            updatePosition(event);
+        };
+
+        const handleMouseUp = () => {
+            if (dragging) {
+                dragging = false;
+                canvas.style.cursor = 'grab';
+                if (onDragChange) onDragChange(false);
+                if (onDragEnd) onDragEnd();
+            }
+        };
+
+        // Only start dragging if trigger is new and different from last processed
+        if (startDragTrigger && startDragTrigger !== lastTriggerRef.current) {
+            dragging = true;
+            canvas.style.cursor = 'grabbing';
+            lastTriggerRef.current = startDragTrigger;
+            if (onDragChange) onDragChange(true);
+        }
+
+        // Add event listeners
+        window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('mouseup', handleMouseUp);
+
+        return () => {
+            window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('mouseup', handleMouseUp);
+        };
+    }, [enabled, hotspotId, camera, scene, raycaster, gl, onUpdatePosition, startDragTrigger, onDragChange, onDragEnd]);
 
     return null;
 }
@@ -77,6 +191,9 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({ modelPath, showControl
     const [addMode, setAddMode] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [settings3D, setSettings3D] = useState<Settings3DConfig>(defaultSettings);
+    const [isDragging, setIsDragging] = useState(false);
+    const [dragTrigger, setDragTrigger] = useState<number>(0);
+    const tempPosition = React.useRef<[number, number, number] | null>(null);
 
     useEffect(() => {
         if (modelPath) {
@@ -125,6 +242,10 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({ modelPath, showControl
         setHotspots(hotspots.map(h => h.id === id ? { ...h, ...updates } : h));
     };
 
+    const updateHotspotPosition = (id: string, position: [number, number, number]) => {
+        updateHotspot(id, { position });
+    };
+
     const selectedHotspot = hotspots.find(h => h.id === selectedHotspotId);
 
     const renderCanvas = () => (
@@ -132,7 +253,10 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({ modelPath, showControl
             shadows={settings3D.enableShadows}
             dpr={[1, 2]}
             camera={{ fov: settings3D.cameraFov }}
-            style={{ background: settings3D.backgroundColor }}
+            style={{
+                background: settings3D.backgroundColor,
+                cursor: addMode ? 'crosshair' : isDragging ? 'grabbing' : 'grab'
+            }}
         >
             <Stage environment={settings3D.environment} intensity={settings3D.lightIntensity}>
                 <Model url={modelUrl!} />
@@ -142,6 +266,7 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({ modelPath, showControl
                         hotspot={hotspot}
                         isSelected={hotspot.id === selectedHotspotId}
                         onClick={() => setSelectedHotspotId(hotspot.id)}
+                        onMouseDown={() => setDragTrigger(Date.now())}
                     />
                 ))}
             </Stage>
@@ -153,11 +278,13 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({ modelPath, showControl
             )}
             <OrbitControls
                 makeDefault
-                enabled={!addMode}
+                enabled={!addMode && !isDragging}
+                enablePan={!addMode && !isDragging}
                 autoRotate={settings3D.autoRotate}
                 autoRotateSpeed={settings3D.autoRotateSpeed}
             />
             {showControls && showHotspots && <ClickToAddHotspot onAddHotspot={addHotspotAtPosition} enabled={addMode} />}
+            {showControls && showHotspots && <DragHotspot enabled={!!selectedHotspotId} hotspotId={selectedHotspotId} onUpdatePosition={updateHotspotPosition} startDragTrigger={dragTrigger} onDragChange={setIsDragging} onDragEnd={() => setDragTrigger(0)} />}
         </Canvas>
     );
 
@@ -190,8 +317,8 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({ modelPath, showControl
                         <button
                             onClick={() => setShowHotspots(!showHotspots)}
                             className={`flex-1 px-4 py-3 text-xs uppercase tracking-widest font-bold transition-all ${showHotspots
-                                    ? 'bg-edia-cyan text-black'
-                                    : 'bg-white/5 hover:bg-white/10 text-white'
+                                ? 'bg-edia-cyan text-black'
+                                : 'bg-white/5 hover:bg-white/10 text-white'
                                 } flex items-center justify-center gap-2`}
                         >
                             <span className="material-icons text-sm">label</span>
@@ -227,21 +354,24 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({ modelPath, showControl
                     <div className="w-80 bg-panel-dark border-l border-white/10 flex flex-col">
                         <div className="p-4 border-b border-white/10 bg-black">
                             <h3 className="text-sm font-bold text-white uppercase tracking-wider mb-3">Hotspot Editor</h3>
-                            <div className="flex gap-2">
+                            <div className="grid grid-cols-2 gap-2 mb-3">
                                 <button
                                     onClick={addHotspot}
-                                    className="flex-1 bg-edia-cyan hover:bg-edia-cyan/80 text-black text-xs px-3 py-2 uppercase tracking-widest flex items-center justify-center gap-2 transition-colors"
+                                    className="bg-edia-cyan hover:bg-edia-cyan/80 text-black text-xs px-3 py-2 uppercase tracking-widest flex items-center justify-center gap-2 transition-colors"
                                 >
                                     <span className="material-icons text-sm">add</span>
                                     Add
                                 </button>
                                 <button
                                     onClick={() => setAddMode(!addMode)}
-                                    className={`flex-1 ${addMode ? 'bg-mitsubishi-red' : 'bg-white/10'} hover:opacity-80 text-white text-xs px-3 py-2 uppercase tracking-widest flex items-center justify-center gap-2 transition-colors`}
+                                    className={`${addMode ? 'bg-mitsubishi-red' : 'bg-white/10'} hover:opacity-80 text-white text-xs px-3 py-2 uppercase tracking-widest flex items-center justify-center gap-2 transition-colors`}
                                 >
                                     <span className="material-icons text-sm">touch_app</span>
                                     {addMode ? 'Cancel' : 'Click'}
                                 </button>
+                            </div>
+                            <div className="text-[10px] text-gray-500 italic text-center bg-white/5 p-2 rounded">
+                                💡 Select a hotspot to drag it on the 3D model
                             </div>
                         </div>
 

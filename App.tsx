@@ -266,7 +266,7 @@ const VisualAnalysis: React.FC<{
         <div className="w-full h-full relative flex items-center justify-center bg-black">
           <img
             ref={imgRef}
-            src={currentImage || "https://picsum.photos/seed/industrial-qc/1200/800"}
+            src={currentImage || "/Imagenes/FLORCLIFT_XL.PNG"}
             className={`w-full h-full object-contain transition-opacity duration-500 ${isAnalyzing ? 'opacity-30' : 'opacity-80'}`}
             alt="Inspection Frame"
             onLoad={updateOverlayPosition}

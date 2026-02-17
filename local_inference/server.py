@@ -51,6 +51,7 @@ def roboflow_proxy():
 
 @app.route('/production-plan', methods=['GET'])
 def get_production_plan():
+    print(f"[{request.method}] /production-plan endpoint hit")
     try:
         # Connection String based on User Screenshot
         conn_str = (
@@ -60,11 +61,15 @@ def get_production_plan():
             r'Trusted_Connection=yes;'
         )
         
-        print(f"Connecting to DB: {conn_str}")
-        conn = pyodbc.connect(conn_str)
+        print(f"Connecting to DB with string: {conn_str}")
+        # Add timeout to prevent hanging
+        conn = pyodbc.connect(conn_str, timeout=5)
+        print("DB Connection Established")
+        
         cursor = conn.cursor()
         
         query = "SELECT TOP 100 REFERENCIA, SECUENCIA, DESCRIPCION FROM dbo.SECUENCIAS_FRONTALES_MG ORDER BY SECUENCIA DESC"
+        print(f"Executing query: {query}")
         cursor.execute(query)
         
         columns = [column[0] for column in cursor.description]
@@ -74,13 +79,18 @@ def get_production_plan():
             results.append(dict(zip(columns, row)))
             
         conn.close()
-        print(f"Fetched {len(results)} rows.")
+        print(f"Fetched {len(results)} rows. Closing Connection.")
         return jsonify({"success": True, "data": results}), 200
         
     except Exception as e:
-        print(f"Database Connection Error: {e}")
+        print(f"CRITICAL ERROR in /production-plan: {e}")
         # Fallback to verify if driver is issue
-        return jsonify({"success": False, "error": str(e), "drivers": pyodbc.drivers()}), 500
+        error_info = {
+            "success": False, 
+            "error": str(e), 
+            "drivers": pyodbc.drivers()
+        }
+        return jsonify(error_info), 500
 
 @app.route('/')
 def home():
